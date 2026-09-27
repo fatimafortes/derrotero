@@ -5,6 +5,92 @@ entry per working session, newest on top.
 
 ---
 
+## Session 4 — 2026-09-27 — Commit 2 verification + Commit 3: seeded simulator
+
+**Verified (Commit 2, on desktop):** turno opened and closed on `PRUEBA-01`,
+5 pings written, `is_simulated = false` as agreed, permission prompt worked,
+"CAPTURA EN VIVO — PRUEBA" label was clearly distinct. Phone test is blocked
+until HTTPS exists (see lesson 2 below) — deferred to after this commit's
+deploy.
+
+**Lesson 1 — editing `schema.sql` does not touch an already-created
+database**
+
+`PRUEBA-01`'s seed insert was added to `schema.sql` §11, but Fatima's
+Supabase project already existed, so nothing re-ran that file and the unit
+never appeared in the picker — she had to insert it by hand.
+**Rule going forward: any change to `schema.sql` gets its exact SQL handed
+to Fatima separately and explicitly, to run herself in the SQL Editor.**
+Editing the file only documents intent for a future from-scratch database; it
+is never mistaken for having been applied.
+
+**Lesson 2 — iOS blocks Geolocation over plain HTTP**
+
+Real-device testing of `/operador` can't happen against `next dev` over
+`http://` on iOS Safari — the Geolocation API is unavailable outside a
+secure context there. Validating the actual permission prompt and
+`watchPosition` on a phone waits until Commit 3's Vercel deploy gives us
+HTTPS.
+
+**Decided — corridor is fabricated but plausibly placed, one direction only**
+
+- `lib/corridor.ts` defines 9 synthetic stops (base "San Bartolo" → terminal
+  "El Toreo") with real-ish coordinates in the Naucalpan area (not surveyed —
+  labeled simulated regardless). Stop `p5-informal` is deliberately placed
+  off the fictional official padrón, for Commit 4 to later surface as the
+  unregistered-stop finding.
+- Runs are one-way (base → terminal) only; the return leg to base is not
+  simulated as pings, just as elapsed clock time between runs (15–25 min).
+  Modeling the return trip added ping volume and complexity for no
+  Commit 4/5 deliverable that needs it. Scope-cut, not an oversight.
+- **The load-triggered departure model is the piece being defended on
+  camera:** each run picks a target occupancy uniformly in 60–85%, converts
+  it to a passenger count against a fixed nominal capacity (18), and derives
+  a wait-at-base duration from an hour-of-day passenger arrival rate (higher
+  05:00–07:00, tapering after). The resulting wait time — and therefore the
+  next departure's headway — is a *consequence* of that model, never a
+  number chosen and inserted. Verified offline before touching the database:
+  a standalone run of `generateSeededCorridorData` produced global headways
+  (all 3 units' departures merged and sorted) ranging 0.3–29.3 minutes,
+  average 11.2 — including a few near-simultaneous departures across
+  different units, which is real bus-bunching behavior emerging from
+  independent per-unit cycles drifting in and out of phase, not a bug.
+- **Bug found and fixed before it shipped:** the 05:00 window start was
+  originally built with `new Date().setHours(5, ...)`, which uses the
+  runtime's local timezone. That's fine locally but Vercel's serverless
+  functions run in UTC, so production would have silently seeded 05:00 UTC —
+  11pm the previous night in Mexico City — instead of the intended rush-hour
+  window. Fixed by constructing `windowStart` from UTC date parts plus a
+  fixed UTC-6 offset (Mexico dropped DST nationally in 2022, so this is a
+  constant, not a lookup).
+
+**Built**
+
+- `lib/corridor.ts`, `lib/geo.ts` (haversine + linear interpolation),
+  `lib/simulator/rng.ts` (seeded PRNG so a re-seed is reproducible),
+  `lib/simulator/generate.ts` — pure, no Supabase dependency, generates
+  `SimUnitPlan[]` (shifts + pings) entirely in memory.
+- `/admin/sembrar`: dirigencia-only page + server action
+  (`app/admin/sembrar/actions.ts`) that deletes only this association's
+  existing *simulated* shifts on SB-01/02/03 (cascade-deletes their pings;
+  never touches `PRUEBA-01`), then inserts 3×14 fresh shifts and their pings
+  in chunks of 500, all writing through the same RLS-scoped session — no
+  service_role key involved.
+
+**First move for next time**
+
+- Push this commit, walk Fatima through the Vercel + Supabase dashboard
+  steps (below, in the chat reply — not repeated here), then have her click
+  "Sembrar corrida simulada" once live and confirm the row counts in
+  Supabase.
+- Then test `/operador` on an actual phone against the HTTPS deploy.
+- Then start Commit 4 (DBSCAN inference engine) — remember to scope its
+  query to `is_simulated = true` (or the three seeded units specifically) so
+  a live `PRUEBA-01` test shift can never leak into the demo's inferred
+  stops or headways.
+
+---
+
 ## Session 3 — 2026-09-27 — Commit 2: driver view (`/operador`)
 
 **Decided — `is_simulated` means "where did this row come from," not "is
