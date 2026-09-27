@@ -5,6 +5,106 @@ entry per working session, newest on top.
 
 ---
 
+## Session 5 — 2026-09-27 — Commit 3 verified in production; Commit 4: inference engine
+
+**Verified (Commit 3, production):** live URL works, Google login works,
+seed produced 14/14/14 runs on SB-01/02/03, `PRUEBA-01` absent from the
+simulated set as intended.
+
+**Decided — where the confidence numbers actually come from**
+
+- `inferred_stops.confidence`: the fraction of all recorded runs (42 in this
+  seed) that have at least one low-speed reading inside that cluster.
+  ≥80% coverage = `alta`, 40–79% = `media`, below 40% = `baja`. Reasoning
+  documented inline in `lib/inference/stops.ts`: a real, fixed-route stop
+  should show up on nearly every run; something under 40% coverage looks
+  more like a one-off (a red light, a single day's diversion) than a stop.
+- `run_metrics.confidence`: how many low-speed GPS readings were captured
+  *while the unit was still waiting at base*, before the first moving
+  reading that marks departure. ≥5 samples = `alta`, 1–2 = `media`, 0 (we
+  only caught it already moving) = `baja`.
+- **Verified offline against the seeded data before writing anything to the
+  database:** with this clean, noise-free generator, every one of the 9
+  stops and all 42 runs came back `alta` — every run visits every stop and
+  every departure is well-sampled, so there's nothing here that should score
+  lower. That's the honest result, not a shortcoming of the confidence
+  system: the tiers exist, are threshold-driven, and are documented; this
+  particular dataset just doesn't have anything under `media`. A real
+  future corridor with actual drivers, GPS dropouts, or a truly one-off stop
+  would populate `media`/`baja` for real.
+
+**Decided — departure time is inferred from pings, not read off the clock**
+
+`shifts.started_at` marks when a run started **waiting** for passengers, not
+when it left. `departed_at` (used for both headway and occupancy) is the
+timestamp of the first ping in that shift whose speed is above the
+low-speed threshold — the actual first moving reading. This is computed
+independently per shift from its own pings only; nothing about the
+generator's internal target-occupancy value is read back. That is also why
+the headway computed here can be trusted to reproduce whatever the
+underlying pings actually encode, bunching included (below).
+
+**Decided — occupancy_at_departure is explicitly an estimate, not a
+measurement**
+
+There is no passenger sensor and never will be (Condition 1/3). The
+estimate ranks each run's wait-at-base duration against every other run's
+wait duration in the dataset, then projects that percentile onto the
+60–85% band the dirigencia already reports from her own user research — it
+does not invent that range, it places each run within a range she already
+knows to be true. **Verified this produces a real, non-hardcoded figure**:
+offline, the seeded data's occupancy estimates average **72.7%**, not the
+78% mentioned as an example — whatever the actual pipeline produces is what
+ships, per your instruction.
+
+**Confirmed — the bunching from Session 4's offline check does show up in
+computed headways**
+
+Global headway (all three units' departures merged and sorted, exactly per
+the Session 2 ruling that headway is a whole-corridor measure, not
+per-unit) is computed by `lib/inference/runMetrics.ts` purely from inferred
+`departed_at` timestamps — nothing about the generator's schedule is read
+directly. Verified offline: min 0.1 min, max 29.4 min, average 11.2 min,
+with 8 of 41 global gaps under 3 minutes — some units' independent 30–40
+minute cycles drift into near-simultaneous departures, exactly the
+"some days it's fast, some days you wait 20 minutes" pattern from Rosa's
+user research. One of those gaps is ~6 seconds between two different
+units — mathematically honest given the model, flagged here rather than
+smoothed away, since altering it to look less coincidental would be exactly
+the kind of manual insertion you told me not to do.
+
+**Built**
+
+- `lib/dbscan.ts` — DBSCAN, commented for someone who doesn't program (the
+  "count nearby points, grow if dense enough, otherwise it's noise"
+  explanation lives at the top of the file, not just in code comments).
+- `lib/inference/stops.ts` — clusters low-speed pings (≤4 km/h, vs. the
+  generator's 5 km/h moving floor — clean separation, no accidental noise
+  from travel segments), computes centroid/dwell/boardings_est/confidence,
+  matches each cluster against `lib/corridor.ts`'s known stops (reused from
+  Commit 3) to set `label` and `in_official_padron`.
+- `lib/inference/runMetrics.ts` — per-shift departure detection, global
+  headway, occupancy estimate, confidence.
+- `/admin/sembrar` gained a second button, "Calcular paradas e intervalos" →
+  `computeInference()`: paginates the pings fetch (Supabase caps a query at
+  1000 rows — with ~3,600 seeded pings this would have silently truncated
+  without `.range()` paging), deletes only this association's previous
+  *simulated* `inferred_stops`/`run_metrics` before writing fresh ones.
+
+**Verified:** `next build`/`eslint` clean; full pipeline run offline against
+the actual seeded generator output (not fabricated test data) before ever
+touching Supabase — 9/9 stops recovered, all figures above.
+
+**First move for next time**
+
+- Fatima: on the live site, click "Calcular paradas e intervalos", then
+  spot-check `inferred_stops`/`run_metrics` in Supabase's table editor.
+- Then start Commit 5 (dirigente dashboard) — the "hallazgo del turno" card
+  should average `run_metrics.occupancy_at_departure` from the database,
+  never restate the 72.7% (or whatever it is at demo time) as a literal.
+
+---
+
 ## Session 4 — 2026-09-27 — Commit 2 verification + Commit 3: seeded simulator
 
 **Verified (Commit 2, on desktop):** turno opened and closed on `PRUEBA-01`,

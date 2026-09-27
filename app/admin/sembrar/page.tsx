@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SeedButton } from "./SeedButton";
+import { InferButton } from "./InferButton";
 
 export default async function SembrarPage() {
   const supabase = await createClient();
@@ -38,6 +39,15 @@ export default async function SembrarPage() {
           las 05:00 y las 08:00. No toca PRUEBA-01 ni ninguna captura real.
         </p>
         <SeedButton />
+
+        <hr className="mt-10 border-foreground/10" />
+
+        <p className="mt-6 text-sm leading-6 text-foreground/70">
+          Después de sembrar: agrupa los pings de baja velocidad en paradas
+          (DBSCAN) y calcula el intervalo real y la ocupación estimada de
+          cada salida.
+        </p>
+        <InferButton />
       </div>
     </main>
   );
