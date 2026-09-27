@@ -5,6 +5,64 @@ entry per working session, newest on top.
 
 ---
 
+## Session 6 — 2026-09-27 — Bug: 0 pings written on iOS, diagnosis in progress
+
+**What broke:** on the deployed HTTPS site, a real shift on an iPhone
+(Safari) ran 65 seconds and opened/closed correctly in `shifts`, but wrote
+**0** rows to `pings`. A same-day desktop test (Chrome, 18 seconds) wrote 5
+pings correctly, so the write path itself works — something iOS-specific is
+either not capturing positions, or capturing them and losing them before
+they reach the database.
+
+**Four suspects, in the order given, #3 and #4 considered most likely
+because the shift closed cleanly:**
+1. Location permission silently denied by iOS.
+2. `watchPosition` starts but its success callback never fires.
+3. The in-memory buffer (a plain ref) is lost when Safari suspends the tab
+   or discards the page — the final "flush on end" would then have nothing
+   to send, which is consistent with a clean-looking shift close and zero
+   pings.
+4. The end-of-shift flush fires but the network request doesn't complete
+   before the page/context goes away.
+
+**Not fixing yet — instrumenting first, per instruction.** Added an
+on-screen, no-console-needed diagnostic panel to `/operador`
+(`app/operador/OperadorClient.tsx`), visible once a shift has been tracked:
+
+- Geolocation permission state via `navigator.permissions.query` (not
+  inferred from our own error handling — directly answers suspect 1).
+- Live count of positions captured this session + timestamp of the last
+  one (answers suspect 2: permission granted but zero captures ever would
+  point straight here).
+- Count of geolocation *errors* received, with the raw code + message.
+- Count of pings currently buffered but not yet sent.
+- Flush attempts / successes / failures, with the actual Supabase error
+  message surfaced (previously silently discarded — this alone answers
+  suspect 4 if it ever fires with an error).
+- **The key instrument for suspect 3:** a per-shift counter, persisted to
+  `localStorage` (not React state, not a ref — those would reset along
+  with the bug if the whole page reloaded) that increments every time this
+  screen (re)mounts while a given shift is open. If this reads >0 after a
+  shift that "closed cleanly," the page was silently torn down and
+  restarted mid-shift without the driver ever noticing — the smoking gun.
+- Separately, tab-hidden count and bfcache-restore count, to distinguish
+  "merely backgrounded, JS state intact" from a genuine reload.
+
+**Explicitly not changed:** `flushBuffer` still clears the in-memory buffer
+before attempting the insert, so a failed flush still loses those specific
+rows with no retry — this is a real latent bug candidate in its own right
+(ties to suspect 4), left exactly as-is for now so the diagnostic panel
+reports what actually happens, rather than a behavior already patched
+underneath it.
+
+**First move for next time:** Fatima runs a real shift on the iPhone again
+against the same deploy and reports what the panel shows — permission
+state, captured count, flush attempts/errors, and above all the reload
+counter. That reading determines which of the four suspects gets the
+actual fix, rather than guessing now.
+
+---
+
 ## Session 5 — 2026-09-27 — Commit 3 verified in production; Commit 4: inference engine
 
 **Verified (Commit 3, production):** live URL works, Google login works,

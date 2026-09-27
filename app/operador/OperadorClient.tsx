@@ -19,6 +19,74 @@ type PingDraft = {
   speed_kmh: number | null;
 };
 
+type DiagPermission =
+  | "granted"
+  | "denied"
+  | "prompt"
+  | "desconocido"
+  | "no-soportado";
+
+type DiagState = {
+  /** How many times this screen has (re)mounted while this shift was open.
+   * >1 means the page was silently reloaded/discarded mid-shift — the
+   * smoking gun for suspicion 3 (buffer lost on suspend/reload). */
+  mountCount: number;
+  permission: DiagPermission;
+  capturedCount: number;
+  lastCapturedAt: string | null;
+  geoErrorCount: number;
+  lastGeoError: string | null;
+  flushAttempts: number;
+  flushSuccesses: number;
+  flushFailures: number;
+  lastFlushError: string | null;
+  bufferedCount: number;
+  hiddenCount: number;
+  bfcacheRestoreCount: number;
+};
+
+const EMPTY_DIAG: DiagState = {
+  mountCount: 0,
+  permission: "desconocido",
+  capturedCount: 0,
+  lastCapturedAt: null,
+  geoErrorCount: 0,
+  lastGeoError: null,
+  flushAttempts: 0,
+  flushSuccesses: 0,
+  flushFailures: 0,
+  lastFlushError: null,
+  bufferedCount: 0,
+  hiddenCount: 0,
+  bfcacheRestoreCount: 0,
+};
+
+function diagStorageKey(shiftId: string) {
+  return `derrotero:diag:${shiftId}`;
+}
+
+/** Reads the diagnostic record for a shift from localStorage, which — unlike
+ * React state or a plain ref — survives a silent page reload. That's the
+ * whole point: if the page gets torn down mid-shift, in-memory-only
+ * counters would reset right along with the bug they're meant to expose. */
+function readDiag(shiftId: string): DiagState {
+  try {
+    const raw = window.localStorage.getItem(diagStorageKey(shiftId));
+    if (!raw) return { ...EMPTY_DIAG };
+    return { ...EMPTY_DIAG, ...(JSON.parse(raw) as Partial<DiagState>) };
+  } catch {
+    return { ...EMPTY_DIAG };
+  }
+}
+
+function writeDiag(shiftId: string, diag: DiagState) {
+  try {
+    window.localStorage.setItem(diagStorageKey(shiftId), JSON.stringify(diag));
+  } catch {
+    // Best-effort only — this is debug scaffolding, not core behavior.
+  }
+}
+
 const UNIT_STORAGE_KEY = "derrotero:unit_id";
 const PING_FLUSH_MS = 10_000;
 
@@ -37,6 +105,8 @@ export function OperadorClient({
   const [shiftId, setShiftId] = useState<string | null>(null);
   const [locationStatus, setLocationStatus] = useState<LocationStatus>("idle");
   const [busy, setBusy] = useState(false);
+
+  const [diag, setDiag] = useState<DiagState>(EMPTY_DIAG);
 
   const watchIdRef = useRef<number | null>(null);
   const flushIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -83,12 +153,87 @@ export function OperadorClient({
     };
   }, [unitId, supabase]);
 
+  // Load (or start) this shift's persisted diagnostic record, bumping
+  // mountCount every time this effect runs for a given shift — including a
+  // silent reload, which is exactly what we're trying to catch. Ending the
+  // shift (shiftId -> null) intentionally does NOT clear `diag`: the panel
+  // needs to keep showing the final counts right after "Terminar turno".
+  useEffect(() => {
+    if (!shiftId) return;
+    const existing = readDiag(shiftId);
+    const withMount = { ...existing, mountCount: existing.mountCount + 1 };
+    writeDiag(shiftId, withMount);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDiag(withMount);
+  }, [shiftId]);
+
+  // Persist every diagnostic update immediately — if the page gets torn
+  // down a moment later, whatever was last written is what survives.
+  useEffect(() => {
+    if (shiftId) writeDiag(shiftId, diag);
+  }, [diag, shiftId]);
+
+  // Geolocation permission state, queried directly rather than inferred —
+  // "denied silently" (suspicion 1) is exactly the case a UI status message
+  // alone could get wrong.
+  useEffect(() => {
+    let status: PermissionStatus | null = null;
+
+    async function checkPermission() {
+      try {
+        if (!("permissions" in navigator)) {
+          setDiag((d) => ({ ...d, permission: "no-soportado" }));
+          return;
+        }
+        status = await navigator.permissions.query({
+          name: "geolocation" as PermissionName,
+        });
+        setDiag((d) => ({ ...d, permission: status!.state as DiagPermission }));
+        status.onchange = () => {
+          setDiag((d) => ({ ...d, permission: status!.state as DiagPermission }));
+        };
+      } catch {
+        setDiag((d) => ({ ...d, permission: "no-soportado" }));
+      }
+    }
+
+    void checkPermission();
+
+    return () => {
+      if (status) status.onchange = null;
+    };
+  }, []);
+
+  // Tab hidden / restored-from-bfcache counters — distinguishes "the page
+  // was merely backgrounded" from a full silent reload (tracked separately
+  // above via mountCount), which would otherwise look identical from the
+  // driver's side: shift opens and closes fine either way.
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        setDiag((d) => ({ ...d, hiddenCount: d.hiddenCount + 1 }));
+      }
+    }
+    function handlePageShow(event: PageTransitionEvent) {
+      if (event.persisted) {
+        setDiag((d) => ({ ...d, bfcacheRestoreCount: d.bfcacheRestoreCount + 1 }));
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handlePageShow);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, []);
+
   const flushBuffer = useCallback(
     async (currentShiftId: string) => {
       const rows = bufferRef.current;
       if (rows.length === 0) return;
       bufferRef.current = [];
-      await supabase.from("pings").insert(
+      setDiag((d) => ({ ...d, flushAttempts: d.flushAttempts + 1, bufferedCount: 0 }));
+      const { error } = await supabase.from("pings").insert(
         rows.map((r) => ({
           association_id: associationId,
           shift_id: currentShiftId,
@@ -99,6 +244,15 @@ export function OperadorClient({
           is_simulated: false,
         }))
       );
+      if (error) {
+        setDiag((d) => ({
+          ...d,
+          flushFailures: d.flushFailures + 1,
+          lastFlushError: error.message,
+        }));
+      } else {
+        setDiag((d) => ({ ...d, flushSuccesses: d.flushSuccesses + 1 }));
+      }
     },
     [associationId, supabase]
   );
@@ -135,11 +289,22 @@ export function OperadorClient({
             lon: position.coords.longitude,
             speed_kmh: speedKmh,
           });
+          setDiag((d) => ({
+            ...d,
+            capturedCount: d.capturedCount + 1,
+            lastCapturedAt: new Date(position.timestamp).toISOString(),
+            bufferedCount: bufferRef.current.length,
+          }));
         },
         (error) => {
           setLocationStatus(
             error.code === error.PERMISSION_DENIED ? "denied" : "unavailable"
           );
+          setDiag((d) => ({
+            ...d,
+            geoErrorCount: d.geoErrorCount + 1,
+            lastGeoError: `code=${error.code} ${error.message}`,
+          }));
         },
         { enableHighAccuracy: true, maximumAge: 5_000, timeout: 15_000 }
       );
@@ -181,6 +346,7 @@ export function OperadorClient({
     }
     setUnitId(null);
     setShiftId(null);
+    setDiag(EMPTY_DIAG);
     setLocationStatus("idle");
   }
 
@@ -310,7 +476,40 @@ export function OperadorClient({
       >
         Cambiar unidad de este teléfono
       </button>
+
+      {diag.mountCount > 0 && <DiagnosticPanel diag={diag} />}
     </CenterScreen>
+  );
+}
+
+function DiagnosticPanel({ diag }: { diag: DiagState }) {
+  return (
+    <div className="mt-8 border border-foreground/15 bg-foreground/5 p-4 text-left font-mono text-[11px] leading-5 text-foreground/70">
+      <p className="mb-2 font-sans text-xs font-semibold text-foreground">
+        DIAGNÓSTICO TEMPORAL — bug de pings en iOS
+      </p>
+      <p>Permiso de ubicación: {diag.permission}</p>
+      <p>
+        Posiciones capturadas: {diag.capturedCount} (última:{" "}
+        {diag.lastCapturedAt ?? "ninguna"})
+      </p>
+      <p>
+        Errores de ubicación: {diag.geoErrorCount}
+        {diag.lastGeoError ? ` (último: ${diag.lastGeoError})` : ""}
+      </p>
+      <p>En espera de enviarse ahora mismo: {diag.bufferedCount}</p>
+      <p>
+        Envíos a la base: {diag.flushAttempts} intentos, {diag.flushSuccesses}{" "}
+        ok, {diag.flushFailures} fallidos
+        {diag.lastFlushError ? ` (último error: ${diag.lastFlushError})` : ""}
+      </p>
+      <p>
+        Recargas silenciosas de esta pantalla durante el turno:{" "}
+        {Math.max(0, diag.mountCount - 1)}
+      </p>
+      <p>Veces que la pestaña se ocultó: {diag.hiddenCount}</p>
+      <p>Restauraciones desde caché (sin recargar): {diag.bfcacheRestoreCount}</p>
+    </div>
   );
 }
 
