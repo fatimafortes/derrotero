@@ -329,6 +329,16 @@ values ('11111111-1111-1111-1111-111111111111','SB-01'),
        ('22222222-2222-2222-2222-222222222222','VX-99')
 on conflict do nothing;
 
+-- Unidad dedicada para ejercitar /operador con GPS real de un teléfono de
+-- prueba. Sus turnos y pings se escriben con is_simulated = false (es
+-- telemetría real, no hay que mentirle a la bandera) pero quedan aislados en
+-- una unidad que no participa del corredor demostrado — se puede borrar por
+-- completo antes de la demo con el bloque de la sección 14, sin tocar las
+-- unidades sembradas por el generador.
+insert into public.units (association_id, economic_number)
+values ('11111111-1111-1111-1111-111111111111','PRUEBA-01')
+on conflict do nothing;
+
 
 -- ============================================================================
 -- 12. ⚠️ CORRE ESTO DESPUÉS DE ENTRAR POR PRIMERA VEZ CON GOOGLE
@@ -390,3 +400,32 @@ to authenticated;
 
 -- pings usa bigserial (id): nextval() necesita usage sobre su secuencia.
 grant usage on all sequences in schema public to authenticated;
+
+
+-- ============================================================================
+-- 14. ⚠️ LIMPIEZA ANTES DE LA DEMO — borra la captura real de prueba
+--
+--     /operador escribe is_simulated = false cuando el dato viene de
+--     watchPosition real (es la verdad técnica del campo, no una mentira de
+--     conveniencia). Eso significa que probar la pantalla con un teléfono de
+--     verdad escribe tu propia posición real en la base, en la unidad
+--     dedicada 'PRUEBA-01'.
+--
+--     Corre esto en el SQL Editor antes de grabar o presentar la demo. Borra
+--     únicamente lo escrito bajo PRUEBA-01; no toca las tres unidades del
+--     corredor sembrado (SB-01/02/03) ni sus turnos, pings, paradas o
+--     métricas.
+--
+-- delete from public.pings
+--  where shift_id in (
+--    select s.id
+--      from public.shifts s
+--      join public.units u on u.id = s.unit_id
+--     where u.economic_number = 'PRUEBA-01'
+--  );
+--
+-- delete from public.shifts
+--  where unit_id in (
+--    select id from public.units where economic_number = 'PRUEBA-01'
+--  );
+-- ============================================================================

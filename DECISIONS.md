@@ -5,6 +5,89 @@ entry per working session, newest on top.
 
 ---
 
+## Session 3 — 2026-09-27 — Commit 2: driver view (`/operador`)
+
+**Decided — `is_simulated` means "where did this row come from," not "is
+this a real event"**
+
+- `is_simulated = false` whenever a row was written by a real `watchPosition`
+  call from a real device. This is the honest technical answer for that
+  column, and the project's thesis is measurement honesty — the flag does
+  not get bent for convenience even during dev testing.
+- To keep real GPS traces (including Fatima's own, while testing the screen)
+  out of the corridor being demoed, added a dedicated unit,
+  `PRUEBA-01` (association 1111…, seeded in `schema.sql` §11), used for
+  nothing except exercising `/operador` with a real phone. Real capture and
+  seeded/simulated capture are now separated by **which unit wrote the row**,
+  not by lying about `is_simulated`.
+- Added `schema.sql` §14: a commented, manual-run `DELETE` block that purges
+  everything under `PRUEBA-01` before a demo or recording, without touching
+  the seeded corridor's units, shifts, pings, stops, or metrics. Fatima's own
+  location at a specific time is her own data, even though no schema column
+  names her — being cleanly deletable on purpose is what makes that
+  acceptable during development.
+- Two distinct, both-true on-screen labels going forward: "DATOS SIMULADOS"
+  for anything read from the seeded generator (Commit 3+), "CAPTURA EN VIVO —
+  PRUEBA" for anything written live from a device via `/operador` (only
+  `PRUEBA-01` for now). Never conflate the two.
+- Forward note for Commit 4: the DBSCAN inference pass should scope its
+  query to the seeded corridor's units (or filter `is_simulated = true`) so a
+  live test shift on `PRUEBA-01` can never leak into the demo's inferred
+  stops or headways.
+
+**Decided — how a phone knows which unit it is**
+
+- The schema has no user↔unit mapping column (`memberships` only has
+  `association_id` + `role`), and the schema is fixed — no new column. So a
+  device's unit assignment lives in that browser's `localStorage`
+  (`derrotero:unit_id`), set once via a one-time "¿Qué unidad es este
+  teléfono?" picker, not re-asked on every visit. This keeps the daily driver
+  screen to the required one button; unit assignment is phone setup, not a
+  driver-facing control. A low-emphasis "cambiar unidad" link exists for
+  reassigning a phone later.
+
+**Built**
+
+- `/operador`: server component gates on session + `memberships` row (same
+  pattern as `/`), fetches the association's units, hands off to a client
+  component.
+- Unit picker (first run only, per device) → one big button that reads
+  "Iniciar turno" / "Terminar turno" depending on whether an open `shifts`
+  row exists for that unit (checked on load, so a reload mid-shift resumes
+  rather than losing state).
+- Starting a shift inserts a `shifts` row (`is_simulated: false`) and starts
+  `watchPosition`; positions batch into an in-memory buffer and flush to
+  `pings` every ~10s. Ending a shift stops the watch, flushes whatever is
+  buffered, then sets `ended_at`.
+- Denied/unavailable/unsupported geolocation each get their own readable
+  Spanish message that does not blame the driver, and none of them block
+  ending the shift.
+- Permanent visible line: "Tu identidad nunca se registra. Solo se guarda la
+  posición de la unidad {X}, nunca de una persona."
+
+**Broke / open**
+
+- Nothing broke. Hit a new-to-this-project ESLint rule
+  (`react-hooks/set-state-in-effect`, bundled with Next 16's default config)
+  that flags the standard "hydrate from localStorage" and "fetch on mount"
+  patterns as errors. These are legitimate, unavoidable uses (avoiding SSR
+  hydration mismatches; resuming an in-progress shift after reload) —
+  suppressed with scoped, commented `eslint-disable-next-line`s rather than
+  contorting the code.
+- Full Google OAuth + live GPS round-trip on `/operador` still needs to be
+  exercised on a real phone against the deployed/dev environment — I can
+  verify the build, types, lint, and the signed-out redirect, but not the
+  actual `watchPosition` permission prompt or a live shift end-to-end.
+
+**First move for next time**
+
+- Fatima: open `/operador` on a phone, pick `PRUEBA-01`, run a short real
+  shift, confirm a `shifts` row and `pings` rows appear (`is_simulated =
+  false`), then run the §14 cleanup before Commit 3's deploy.
+- Then start Commit 3 (seeded simulator + first deploy).
+
+---
+
 ## Session 2 — 2026-09-27 — Bug: 42501 permission denied, looked like RLS
 
 **What broke**
