@@ -5,6 +5,47 @@ entry per working session, newest on top.
 
 ---
 
+## Session 2 — 2026-09-27 — Bug: 42501 permission denied, looked like RLS
+
+**What broke**
+
+- After signing in with Google and inserting the membership row by hand, the
+  app still showed "Todavía no perteneces a una asociación" — the empty-
+  membership screen — even though the row existed and `auth.uid()` matched.
+- Real error, once logged instead of guessed at: `42501 permission denied for
+  table memberships`.
+- Root cause: this Supabase project has **"Automatically expose new tables"
+  turned off**, so creating a table does not grant `SELECT`/`INSERT`/
+  `UPDATE`/`DELETE` to the `authenticated` role by default. The query was
+  rejected at the privilege-check layer, before Postgres ever evaluated Row
+  Level Security.
+
+**Lesson — a 42501 looks identical to RLS denying, but it isn't**
+
+A missing table-level `GRANT` and an RLS policy returning zero rows produce
+the *same visible symptom* from the app (empty result / "you don't belong
+here"), but they are two different layers: privilege check happens first,
+RLS second. Do not assume "empty result" means "policy problem" — log the
+actual Postgres error code before changing any policy. This is why the
+working rule "show the actual error text before guessing at a fix" mattered
+here: guessing would have led to needlessly rewriting `is_member()` or the
+RLS policies, which were correct all along.
+
+**Fix**
+
+- Added an explicit `GRANT` block to `supabase/schema.sql` (§13): `SELECT`
+  only on `associations`/`memberships` (membership is administered, not
+  self-service), full CRUD on the six operational tables, `USAGE` on
+  sequences. `anon` gets nothing — its only door stays `dossier_by_token`.
+- Removed the temporary `console.log` diagnostics from `app/page.tsx`. Kept
+  the `console.error` in `/auth/callback` — that one is a permanent,
+  legitimate log of a real failure path, not a one-off diagnostic.
+
+**Verified:** association name and role `dirigencia` render correctly on
+screen after the grants were applied.
+
+---
+
 ## Session 1 — 2026-09-27 — Commit 1: scaffold + auth
 
 **Decided**

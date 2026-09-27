@@ -347,3 +347,46 @@ on conflict do nothing;
 --     una SEGUNDA cuenta de Google y ligala a la asociación 2222...:
 --     debe ver cero filas de la asociación 1111....
 -- ============================================================================
+
+
+-- ============================================================================
+-- 13. GRANTS explícitos al rol authenticated
+--
+--     Motivo: este proyecto tiene desactivado "Automatically expose new
+--     tables" en la configuración de Supabase. Eso significa que crear una
+--     tabla NO le da automáticamente privilegio SELECT/INSERT/UPDATE/DELETE
+--     al rol `authenticated` — a diferencia del comportamiento por defecto.
+--     Sin este bloque, toda consulta falla con:
+--
+--         42501  permission denied for table <nombre>
+--
+--     y ese error ocurre ANTES de que Postgres llegue a evaluar Row Level
+--     Security. Un 42501 se ve, desde la app, exactamente igual que "RLS negó
+--     la fila" (cero filas / consulta rechazada), pero es una capa distinta y
+--     anterior: falta de permiso sobre la tabla, no una política que niega.
+--     Si recreas esta base desde cero y omites este bloque, te topas con el
+--     mismo muro.
+--
+--     `anon` no recibe ningún GRANT aquí. Su única puerta de lectura sigue
+--     siendo `dossier_by_token` (security definer), nunca las tablas
+--     directamente — así queda la cláusula sombra intacta también a nivel de
+--     permisos, no solo de política.
+-- ============================================================================
+
+-- associations y memberships: solo lectura. La dirigencia no puede darse de
+-- alta ni cambiar de asociación por su cuenta; eso lo hace quien administra.
+grant select on public.associations, public.memberships to authenticated;
+
+-- las seis tablas operativas: lectura y escritura, siempre acotada después
+-- por RLS a la fila donde is_member(association_id) es verdadero.
+grant select, insert, update, delete on
+  public.units,
+  public.shifts,
+  public.pings,
+  public.inferred_stops,
+  public.run_metrics,
+  public.share_grants
+to authenticated;
+
+-- pings usa bigserial (id): nextval() necesita usage sobre su secuencia.
+grant usage on all sequences in schema public to authenticated;
