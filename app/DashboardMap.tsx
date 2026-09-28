@@ -1,8 +1,19 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { LngLatBounds, Map as MapLibreMap, Popup } from "maplibre-gl";
+import { LngLatBounds, Map as MapLibreMap, Popup, setWorkerUrl } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+
+// Next.js/Turbopack resolves MapLibre's internal worker chunk to a URL that
+// 404s in production (Next's HTML 404 page gets served where a .mjs was
+// expected, so the browser refuses it as a module script — MIME mismatch).
+// Pointing the worker at a plain static file under /public sidesteps
+// Turbopack's bundling of it entirely: Next's static file server always
+// returns the right JS content type for it, regardless of that bug.
+// public/maplibre-gl-worker.mjs is a committed copy of
+// node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs — re-copy it if
+// maplibre-gl is ever upgraded.
+setWorkerUrl("/maplibre-gl-worker.mjs");
 
 export type MapStop = {
   lat: number;

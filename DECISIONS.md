@@ -5,6 +5,35 @@ entry per working session, newest on top.
 
 ---
 
+## Session 10 — 2026-09-27 — Map bug resolved: MapLibre's worker, not CSS
+
+**Root cause, one line:** Turbopack resolves MapLibre's internal web worker
+to a URL that 404s in production, the browser gets Next's HTML 404 page
+where it expected a JS module, refuses it on MIME-type grounds, the worker
+never starts, and without it MapLibre can't process vector tiles — hence a
+blank canvas with only the (worker-independent) attribution control
+showing. All three things ruled out last session (CSS import, container
+height, CSP) were correctly ruled out; this is a known MapLibre/Next.js +
+Turbopack bundler-integration gap, not our code.
+
+**Fix — simplest that works, per instruction, not the most elegant one:**
+MapLibre exports `setWorkerUrl()` specifically for bundlers that mis-resolve
+its worker. Copied `node_modules/maplibre-gl/dist/maplibre-gl-worker.mjs` to
+`public/maplibre-gl-worker.mjs` (a committed static asset) and call
+`setWorkerUrl("/maplibre-gl-worker.mjs")` before constructing the map.
+Next's static file server always serves it with the correct
+`application/javascript` content type, regardless of Turbopack's bundling
+of the worker — verified locally with `next start` before shipping.
+**Maintenance note:** this file is a manual copy, not generated at build
+time — re-copy it if `maplibre-gl` is ever upgraded, or the worker will
+silently point at stale code.
+
+**First move for next time:** redeploy, verify the map paints (see chat
+reply for the exact check), then start Commit 6 (sharing + dossier +
+second deploy).
+
+---
+
 ## Session 9 — 2026-09-27 — Two Commit 5 bugs in production: one fixed, one open
 
 **Fixed: headway chart drew no bars.** Confirmed Fatima's own hypothesis
