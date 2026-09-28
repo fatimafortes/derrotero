@@ -268,7 +268,7 @@ function HeadwayChart({
       <p className="mt-1 text-xs text-foreground/60">
         Base San Bartolo · 05:00–08:00 · minutos
       </p>
-      <div className="mt-4 flex h-32 items-end gap-2">
+      <div className="mt-4 flex items-end gap-2">
         {buckets.map((b) => {
           const isMax = b.averageMinutes !== null && b.averageMinutes === max;
           return (
@@ -278,16 +278,22 @@ function HeadwayChart({
                   {Math.round(b.averageMinutes)}
                 </span>
               )}
-              <div
-                className={`w-full ${isMax ? "bg-accent" : "bg-data"}`}
-                style={{
-                  height:
-                    b.averageMinutes !== null
-                      ? `${Math.max(6, (b.averageMinutes / max) * 100)}%`
-                      : "2px",
-                  opacity: b.averageMinutes !== null ? 1 : 0.25,
-                }}
-              />
+              {/* Fixed-height track: a percentage height on the bar below
+                  only resolves against a parent with a DEFINITE height —
+                  the outer row is sized by content, not fixed, so the bar
+                  needs its own explicit-height container to size against. */}
+              <div className="flex h-24 w-full items-end">
+                <div
+                  className={`w-full ${isMax ? "bg-accent" : "bg-data"}`}
+                  style={{
+                    height:
+                      b.averageMinutes !== null
+                        ? `${Math.max(6, (b.averageMinutes / max) * 100)}%`
+                        : "2px",
+                    opacity: b.averageMinutes !== null ? 1 : 0.25,
+                  }}
+                />
+              </div>
               <span className="text-[10px] text-foreground/50">{b.label}</span>
             </div>
           );

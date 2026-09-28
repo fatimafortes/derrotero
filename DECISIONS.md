@@ -5,6 +5,45 @@ entry per working session, newest on top.
 
 ---
 
+## Session 9 — 2026-09-27 — Two Commit 5 bugs in production: one fixed, one open
+
+**Fixed: headway chart drew no bars.** Confirmed Fatima's own hypothesis
+exactly. The bar's `style={{ height: "X%" }}` was a child of
+`<div className="flex flex-1 flex-col items-center gap-1">` — a column with
+no explicit height of its own (only the *outer row* had `h-32`). A
+percentage height only resolves against a parent with a *definite* height;
+against an auto-sized parent it computes to nothing. Fixed by giving the bar
+its own fixed-height track (`h-24`) to size against, separate from the
+value/hour labels that sit above and below it.
+
+**Open: map panel renders nothing but the attribution control.** Before
+touching any code, tried to reproduce this live (attempted to sign into the
+production site as Fatima's dirigencia Google account via browser
+automation) — got as far as the account chooser but Google's own page
+stopped responding to automated clicks after two tries, so stopped rather
+than loop, per the tool's own guidance. Did verify, from the actual
+production build output, several things this is *not*:
+- `maplibre-gl.css` is genuinely bundled and registered against `/`'s
+  client-reference-manifest — the CSS import itself is not missing.
+- The `.maplibregl-canvas` rule (`position:absolute; top:0; left:0`) is
+  present in that bundled CSS.
+- The Tailwind utilities on the container chain (`h-[360px]`, `h-full`,
+  `min-h-[320px]`) all compiled correctly — not a missed-class build issue.
+- `next.config.ts` sets no custom headers/CSP that could be blocking
+  cross-origin tile/style requests.
+
+None of that rules out a genuine runtime issue (container measuring 0
+height at the exact moment the `Map` is constructed, a CSP or CORS block
+from Vercel's own defaults, a worker-bundling issue specific to Turbopack,
+or something else entirely) — those need the actual browser console/network
+output, which static build inspection can't show. Asked Fatima for it
+directly rather than guess further, with exact DevTools steps.
+
+**First move for next time:** once the console/network output comes back,
+diagnose and fix the map from that, not from another round of guessing.
+
+---
+
 ## Session 8 — 2026-09-27 — Commit 5: dirigente dashboard (`/`)
 
 **Decided — `/` now redirects an operador-role member to `/operador`**
