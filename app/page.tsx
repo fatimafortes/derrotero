@@ -1,6 +1,17 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { signOut } from "@/lib/supabase/actions";
+import { CORRIDOR_STOPS } from "@/lib/corridor";
+import {
+  averageDwellExcludingBase,
+  averageOccupancy,
+  computeHeadwayBuckets,
+  dominantConfidence,
+  maxHeadwayInWindow,
+  type InferredStopRow,
+  type RunMetricRow,
+} from "@/lib/dashboardStats";
+import { DashboardMap, type MapStop } from "@/app/DashboardMap";
 
 type MembershipRow = {
   role: string;
@@ -43,21 +54,297 @@ export default async function HomePage() {
     );
   }
 
+  // The dashboard is the dirigencia's screen. An operador has exactly one
+  // control and it isn't this page.
+  if (membership.role !== "dirigencia") {
+    redirect("/operador");
+  }
+
+  const associationId = membership.association_id;
   const associationName = Array.isArray(membership.associations)
     ? membership.associations[0]?.name
     : membership.associations?.name;
 
+  const [{ data: activeGrants }, { data: stopsData }, { data: runsData }] =
+    await Promise.all([
+      supabase
+        .from("share_grants")
+        .select("recipient_label")
+        .eq("association_id", associationId)
+        .is("revoked_at", null),
+      supabase
+        .from("inferred_stops")
+        .select(
+          "lat, lon, label, dwell_seconds_avg, boardings_est, runs_observed, confidence, in_official_padron"
+        )
+        .eq("association_id", associationId)
+        .eq("is_simulated", true),
+      supabase
+        .from("run_metrics")
+        .select("departed_at, headway_minutes, occupancy_at_departure, confidence")
+        .eq("association_id", associationId)
+        .eq("is_simulated", true)
+        .order("departed_at", { ascending: true }),
+    ]);
+
+  const stops = (stopsData ?? []) as InferredStopRow[];
+  const runs = (runsData ?? []) as RunMetricRow[];
+  const isSharing = (activeGrants?.length ?? 0) > 0;
+
+  const hasData = stops.length > 0 && runs.length > 0;
+
+  const headwayBuckets = computeHeadwayBuckets(runs);
+  const hallazgoHeadway = maxHeadwayInWindow(runs);
+  const occupancyPct = Math.round(averageOccupancy(runs) * 100);
+  const dwellAvg = Math.round(averageDwellExcludingBase(stops));
+  const overallConfidence = dominantConfidence(runs);
+
+  const routeCoordinates: [number, number][] = CORRIDOR_STOPS.map((s) => [
+    s.lon,
+    s.lat,
+  ]);
+  const mapStops: MapStop[] = stops.map((s) => ({
+    lat: s.lat,
+    lon: s.lon,
+    label: s.label,
+    boardingsEst: s.boardings_est,
+    inOfficialPadron: s.in_official_padron,
+    runsObserved: s.runs_observed,
+    confidence: s.confidence,
+    dwellSecondsAvg: s.dwell_seconds_avg,
+  }));
+
   return (
-    <Screen>
-      <h1 className="mt-2 text-xl font-semibold text-foreground">
-        {associationName}
-      </h1>
-      <p className="mt-3 text-sm leading-6 text-foreground/70">
-        Sesión iniciada como{" "}
-        {membership.role === "dirigencia" ? "dirigencia" : "operador"}.
+    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
+      <header className="mb-6 flex flex-wrap items-baseline justify-between gap-2">
+        <div>
+          <p className="text-sm font-medium tracking-wide text-accent">
+            DERROTERO
+          </p>
+          <h1 className="text-lg font-semibold text-foreground">
+            {associationName}
+          </h1>
+        </div>
+        <form action={signOut}>
+          <button className="text-sm font-medium text-data underline underline-offset-4">
+            Cerrar sesión
+          </button>
+        </form>
+      </header>
+
+      <ShadowClauseBanner isSharing={isSharing} recipients={activeGrants ?? []} />
+
+      {!hasData ? (
+        <p className="mt-8 text-sm leading-6 text-foreground/70">
+          Todavía no hay datos sembrados ni inferencia calculada para esta
+          asociación. Ve a <code>/admin/sembrar</code> y corre ambos pasos.
+        </p>
+      ) : (
+        <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[2fr_1fr]">
+          <div className="flex flex-col gap-6">
+            <section className="border border-foreground/10 bg-white">
+              <div className="flex items-start justify-between gap-3 border-b border-foreground/10 p-4">
+                <div>
+                  <h2 className="text-sm font-semibold text-foreground">
+                    Paradas inferidas del recorrido
+                  </h2>
+                  <p className="mt-1 text-xs text-foreground/60">
+                    Agrupamiento de detenciones (DBSCAN) · {stops.length}{" "}
+                    paradas · {runs.length} corridas
+                  </p>
+                </div>
+                <span className="whitespace-nowrap border border-accent px-2 py-1 text-[11px] font-semibold tracking-wide text-accent">
+                  DATOS SIMULADOS
+                </span>
+              </div>
+              <div className="h-[360px] w-full">
+                <DashboardMap routeCoordinates={routeCoordinates} stops={mapStops} />
+              </div>
+              <p className="border-t border-foreground/10 p-3 text-[11px] text-foreground/50">
+                Tamaño del círculo = ascensos estimados por turno. Círculo
+                claro = parada real no registrada en el padrón oficial.
+              </p>
+            </section>
+
+            <StatRow
+              runsRecorded={runs.length}
+              stopsInferred={stops.length}
+              dwellAvgSeconds={dwellAvg}
+            />
+          </div>
+
+          <div className="flex flex-col gap-6">
+            <HeadwayChart buckets={headwayBuckets} />
+            <HallazgoCard
+              occupancyPct={occupancyPct}
+              headway={hallazgoHeadway}
+              runCount={runs.length}
+              confidence={overallConfidence}
+            />
+            <OperadorPreview />
+          </div>
+        </div>
+      )}
+    </main>
+  );
+}
+
+function ShadowClauseBanner({
+  isSharing,
+  recipients,
+}: {
+  isSharing: boolean;
+  recipients: { recipient_label: string }[];
+}) {
+  return (
+    <section className="flex flex-wrap items-center justify-between gap-3 border border-accent/40 bg-accent/5 p-4">
+      <div>
+        <p className="text-sm font-semibold text-foreground">
+          Esta medición es de la asociación. Nadie fuera de ella puede verla.
+        </p>
+        <p className="mt-1 text-xs leading-5 text-foreground/70">
+          Compartir con una autoridad es una decisión de la dirigencia,
+          reversible, y queda registrada con fecha y destinatario.
+        </p>
+      </div>
+      <div className="text-right">
+        <p className="text-[11px] font-medium tracking-wide text-foreground/60">
+          COMPARTIR CON TERCEROS
+        </p>
+        <p
+          className={`text-sm font-bold ${isSharing ? "text-data" : "text-accent"}`}
+        >
+          {isSharing
+            ? `ACTIVO — ${recipients.map((r) => r.recipient_label).join(", ")}`
+            : "DESACTIVADO"}
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function StatRow({
+  runsRecorded,
+  stopsInferred,
+  dwellAvgSeconds,
+}: {
+  runsRecorded: number;
+  stopsInferred: number;
+  dwellAvgSeconds: number;
+}) {
+  const stats: { value: string; label: string }[] = [
+    { value: String(runsRecorded), label: "corridas registradas" },
+    { value: String(stopsInferred), label: "paradas inferidas" },
+    { value: `${dwellAvgSeconds} s`, label: "detención media" },
+    { value: "0", label: "campos con identidad" },
+  ];
+  return (
+    <section className="grid grid-cols-2 gap-4 border border-foreground/10 bg-white p-4 sm:grid-cols-4">
+      {stats.map((s) => (
+        <div key={s.label}>
+          <p className="text-3xl font-semibold text-foreground">{s.value}</p>
+          <p className="text-xs text-foreground/60">{s.label}</p>
+        </div>
+      ))}
+      <p className="col-span-2 text-[11px] text-foreground/50 sm:col-span-4">
+        Todos los datos mostrados son simulados y están etiquetados como
+        tales.
       </p>
-      <SignOutLink />
-    </Screen>
+    </section>
+  );
+}
+
+function HeadwayChart({
+  buckets,
+}: {
+  buckets: { label: string; averageMinutes: number | null; sampleCount: number }[];
+}) {
+  const max = Math.max(1, ...buckets.map((b) => b.averageMinutes ?? 0));
+  return (
+    <section className="border border-foreground/10 bg-white p-4">
+      <h2 className="text-sm font-semibold text-foreground">
+        Intervalo real entre unidades
+      </h2>
+      <p className="mt-1 text-xs text-foreground/60">
+        Base San Bartolo · 05:00–08:00 · minutos
+      </p>
+      <div className="mt-4 flex h-32 items-end gap-2">
+        {buckets.map((b) => {
+          const isMax = b.averageMinutes !== null && b.averageMinutes === max;
+          return (
+            <div key={b.label} className="flex flex-1 flex-col items-center gap-1">
+              {b.averageMinutes !== null && (
+                <span className="text-[11px] font-semibold text-foreground/70">
+                  {Math.round(b.averageMinutes)}
+                </span>
+              )}
+              <div
+                className={`w-full ${isMax ? "bg-accent" : "bg-data"}`}
+                style={{
+                  height:
+                    b.averageMinutes !== null
+                      ? `${Math.max(6, (b.averageMinutes / max) * 100)}%`
+                      : "2px",
+                  opacity: b.averageMinutes !== null ? 1 : 0.25,
+                }}
+              />
+              <span className="text-[10px] text-foreground/50">{b.label}</span>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function HallazgoCard({
+  occupancyPct,
+  headway,
+  runCount,
+  confidence,
+}: {
+  occupancyPct: number;
+  headway: { minutes: number; label: string } | null;
+  runCount: number;
+  confidence: string;
+}) {
+  return (
+    <section className="border border-data/40 bg-data/5 p-4">
+      <p className="text-xs font-semibold tracking-wide text-data">
+        HALLAZGO DEL TURNO
+      </p>
+      <h2 className="mt-1 text-base font-semibold text-foreground">
+        La salida no es por reloj. Es por llenado.
+      </h2>
+      <p className="mt-2 text-sm leading-6 text-foreground/70">
+        Las unidades salen de base con un {occupancyPct}% de ocupación
+        simulada en promedio, no a una hora fija.
+        {headway &&
+          ` El intervalo de ${Math.round(headway.minutes)} min a las ${headway.label} es consecuencia de eso, no de una demora.`}
+      </p>
+      <p className="mt-3 text-[11px] text-foreground/50">
+        Confianza {confidence} · {runCount} corridas · sin verificar en campo
+      </p>
+    </section>
+  );
+}
+
+function OperadorPreview() {
+  return (
+    <section className="border border-foreground/10 bg-white p-4">
+      <h2 className="text-sm font-semibold text-foreground">
+        Pantalla del operador (vista completa)
+      </h2>
+      <div className="mt-3 flex items-center gap-4">
+        <div className="flex-1 border border-foreground/15 bg-foreground/5 px-4 py-6 text-center text-sm font-bold text-foreground/40">
+          Iniciar / Terminar turno
+        </div>
+        <p className="flex-1 text-xs leading-5 text-foreground/60">
+          Un solo control. El operador aporta posición y puede apagarlo
+          cuando quiera. Sin nombre, sin calificación.
+        </p>
+      </div>
+    </section>
   );
 }
 

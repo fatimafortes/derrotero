@@ -5,6 +5,84 @@ entry per working session, newest on top.
 
 ---
 
+## Session 8 — 2026-09-27 — Commit 5: dirigente dashboard (`/`)
+
+**Decided — `/` now redirects an operador-role member to `/operador`**
+
+The dashboard is explicitly the dirigencia's screen. A member whose only
+role is `operador` has no reason to see the association's map/findings, and
+routing them straight to their one button keeps the asymmetry the product
+is built around visible in the navigation itself, not just the UI copy.
+
+**Decided — the shadow-clause banner shows real state, but isn't a working
+control yet**
+
+Commit 5's own text says "with the real sharing state" — it queries
+`share_grants` for any row with `revoked_at is null` and shows
+ACTIVO/DESACTIVADO honestly. It does **not** render a toggle that does
+nothing when clicked — that would be worse than an honest static badge,
+especially for a persona-test participant who might click it and get
+confused when nothing happens. The actual grant/revoke control is explicitly
+Commit 6's job (`share_grants` writes, the token, the dossier). Same
+reasoning for the mockup's "Expediente de demanda" card — left out of this
+commit entirely rather than built as an inert placeholder.
+
+**Decided — the "hallazgo del turno" card's numbers are computed, never the
+mockup's illustrative figures**
+
+The mockup (`docs/mockup.png`, an AI-generated illustration from the packet,
+not literal copy) shows "78% de las corridas..." and "21 min a las 05:30" —
+those are placeholder numbers from before the exact mechanics existed. The
+real card always states whatever `averageOccupancy()` and
+`maxHeadwayInWindow()` actually compute from `run_metrics` — currently
+72.7% and a real 29.4-minute gap at 05:38, not the mockup's numbers. If the
+seed changes, this text changes with it automatically.
+
+**Decided — "detención media" excludes the base stop**
+
+Base's dwell is the occupancy fill-wait (minutes), not boarding/alighting
+dwell at a regular stop (seconds) — averaging them together would produce a
+number that means nothing. `averageDwellExcludingBase()` in
+`lib/dashboardStats.ts` filters out whichever stop matches
+`CORRIDOR_STOPS[0].label` before averaging.
+
+**Decided — headway chart window is a Mexico-local-time-of-day filter, not
+a date range**
+
+The seeded corridor's 14 runs/unit span several hours past 08:00 (each
+cycle is ~30-40 min; 14 of them run well into the afternoon), and the
+dashboard could be viewed on a different calendar day than when
+`/admin/sembrar` was run. `lib/mexicoTime.ts` extracts local hour-of-day
+(fixed UTC-6) from each `departed_at` and the chart only buckets
+departures whose hour falls in [5, 8) — verified offline: 16 of 42 seeded
+departures land in that window, spread 2–3 per 30-minute bucket, averages
+ranging 3.2–13.8 minutes, with the real maximum (29.4 min) correctly
+surfacing at 05:38.
+
+**Built**
+
+- `lib/mexicoTime.ts`, `lib/dashboardStats.ts` — pure functions, no
+  Supabase dependency, computing headway buckets, dominant confidence,
+  average occupancy, average dwell, and the single largest in-window
+  headway. Verified offline against the actual generator+inference
+  pipeline output before wiring into the page.
+- `app/DashboardMap.tsx` (client) — MapLibre GL JS, free Carto Positron
+  style, no API key. Route line from `lib/corridor.ts`'s known stop
+  sequence (not re-derived from unordered `inferred_stops`, which have no
+  sequence field); stop circles sized by `boardings_est`; a persistent
+  (non-dismissing) callout on whichever stop isn't in the official padrón.
+- `app/page.tsx` rebuilt as the full dashboard: shadow-clause banner, map
+  panel with "DATOS SIMULADOS" badge, stat row (runs/stops/dwell/"0 campos
+  con identidad"), headway chart, hallazgo card, and a small static inset
+  preview of the operador screen (the mockup's third deliberate choice —
+  making the measurement asymmetry visible in the interface itself).
+
+**First move for next time:** start Commit 6 (sharing + dossier + second
+deploy) — the shadow-clause banner and the omitted "Expediente" card both
+get their real, working controls there.
+
+---
+
 ## Session 7 — 2026-09-27 — iOS 0-pings bug: resolved (device, not code)
 
 **Resolution:** the on-screen diagnostic panel added in Session 6 answered
