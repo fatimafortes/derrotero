@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createShareGrant, revokeShareGrant } from "@/app/shareActions";
+import { formatMexicoDateTime } from "@/lib/mexicoTime";
 
 export type Grant = {
   id: string;
@@ -149,10 +150,10 @@ export function ShareControl({
                       {g.granted_by === currentUserId
                         ? "tú"
                         : "otro integrante de la dirigencia"}{" "}
-                      · {new Date(g.granted_at).toLocaleString("es-MX")}
+                      · {formatMexicoDateTime(g.granted_at)}
                       {!isActive &&
                         g.revoked_at &&
-                        ` · revocado ${new Date(g.revoked_at).toLocaleString("es-MX")}`}
+                        ` · revocado ${formatMexicoDateTime(g.revoked_at)}`}
                     </span>
                     {isActive && (
                       <button

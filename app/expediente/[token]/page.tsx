@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { PrintButton } from "@/app/PrintButton";
+import { formatMexicoDate, formatMexicoDateTime } from "@/lib/mexicoTime";
 
 type DossierStop = {
   lat: number;
@@ -73,8 +74,8 @@ export default async function ExpedientePage({
           </h1>
           <p className="mt-1 text-sm text-foreground/70">
             Compartido con {dossier.destinatario} el{" "}
-            {new Date(dossier.compartido_el).toLocaleDateString("es-MX")} ·
-            corte al {new Date(dossier.corte_al).toLocaleString("es-MX")}
+            {formatMexicoDate(dossier.compartido_el)} · corte al{" "}
+            {formatMexicoDateTime(dossier.corte_al)}
           </p>
         </div>
         <PrintButton />
@@ -139,7 +140,7 @@ export default async function ExpedientePage({
               {dossier.corridas.map((c, i) => (
                 <tr key={i} className="border-b border-foreground/5">
                   <td className="py-1 pr-2">
-                    {new Date(c.salida).toLocaleString("es-MX")}
+                    {formatMexicoDateTime(c.salida)}
                     {c.simulado && (
                       <span className="ml-1 text-[10px] font-semibold text-accent">
                         SIMULADO

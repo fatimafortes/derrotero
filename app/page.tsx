@@ -15,6 +15,7 @@ import {
 import { DashboardMap, type MapStop } from "@/app/DashboardMap";
 import { ShareControl, type Grant } from "@/app/ShareControl";
 import { PrintButton } from "@/app/PrintButton";
+import { formatMexicoDate, formatMexicoDateTime } from "@/lib/mexicoTime";
 import {
   HallazgoCard,
   HeadwayChart,
@@ -221,7 +222,7 @@ function ExpedienteCard({
   runsRecorded: number;
   stopsInferred: number;
 }) {
-  const today = new Date().toLocaleDateString("es-MX");
+  const today = formatMexicoDate(new Date().toISOString());
   return (
     <section className="border border-foreground/10 bg-white p-4">
       <h2 className="text-sm font-semibold text-foreground">
@@ -249,7 +250,7 @@ function PrintableDossier({
   stops: InferredStopRow[];
   runs: RunMetricRow[];
 }) {
-  const today = new Date().toLocaleDateString("es-MX");
+  const today = formatMexicoDate(new Date().toISOString());
   return (
     <main className="hidden px-8 py-8 print:block">
       <p className="text-sm font-medium tracking-wide text-accent">
@@ -313,7 +314,7 @@ function PrintableDossier({
             {runs.map((r, i) => (
               <tr key={i} className="border-b border-foreground/5">
                 <td className="py-1 pr-2">
-                  {new Date(r.departed_at).toLocaleString("es-MX")}
+                  {formatMexicoDateTime(r.departed_at)}
                 </td>
                 <td className="py-1 pr-2">
                   {r.headway_minutes !== null

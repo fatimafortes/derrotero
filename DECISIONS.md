@@ -5,6 +5,70 @@ entry per working session, newest on top.
 
 ---
 
+## Session 14 — 2026-09-27 — Bug #3 found by observation: /expediente dates in UTC
+
+**Found by the persona test, not by guessing — the third time this project's
+real bugs came from watching actual behavior instead of reasoning about the
+code.** (#1: the 42501 permission error that looked like RLS, Session 2.
+#2: the iOS 0-pings bug that turned out to be a device permission, Session
+7.) This one: the synthetic persona opened `/expediente/[token]` and did
+date arithmetic — "corte al" read 28/9, 2:17 a.m. when she opened it at
+20:17 on the 27th, exactly a 6-hour gap, and the same `salida` times that
+show as 05:00–08:00 on the dashboard's headway chart showed as 11:00–13:00
+in the dossier's own table. Her verbatim reaction is worth keeping as a
+design note in its own right: *"Si la fecha de arriba está mal, ¿por qué
+voy a creer los números de abajo?"* — for a product whose whole thesis is
+measurement honesty, a wrong header date doesn't just look like a bug, it
+undermines every number below it.
+
+**Root cause: the same bug class as the Commit 3 windowStart bug, in the
+display layer instead of the generator.** `date.toLocaleString("es-MX")`
+only sets *locale* (date order, month names, am/pm) — it never sets
+*timezone*. Without an explicit `timeZone`, it renders in whatever
+timezone the process happens to run in, which is UTC on Vercel. The
+dashboard's headway chart was never affected because its bucket labels
+come from `lib/dashboardStats.ts`'s `mexicoHourOfDay()`, which does its own
+fixed-offset math — but every *other* date display in the app used the
+naive `toLocaleString`/`toLocaleDateString("es-MX")` pattern and was
+silently wrong in production. Grepped for every call site rather than
+patching only what was reported:
+
+- `/expediente/[token]` — header ("compartido el"), corte al, and every
+  `salida` in the corridas table (what Fatima explicitly reported).
+- `app/page.tsx` — `ExpedienteCard`'s and `PrintableDossier`'s "corte al"
+  dates, and every `departed_at` in the printable dossier's own table.
+- `app/ShareControl.tsx` — the bitácora's `granted_at`/`revoked_at`. This
+  one is worth calling out on its own: Condition 2 depends on grants being
+  *dated* and *logged* — a wrong timezone in the dirigencia's own audit
+  log of who-shared-what-when is a real, if quieter, honesty problem in
+  the exact mechanism the shadow clause depends on. Not reported yet, but
+  the same bug, so fixed the same way rather than left for someone to find
+  later.
+
+**Fix:** `lib/mexicoTime.ts` gained `formatMexicoDate()` and
+`formatMexicoDateTime()` — both shift the UTC instant by the fixed
+Mexico-City offset already used by `mexicoHourOfDay()`, then format with
+`timeZone: "UTC"` explicitly, so the formatter reads the shifted
+wall-clock fields directly rather than reapplying whatever timezone the
+process runs in. Every `toLocaleString`/`toLocaleDateString("es-MX")` call
+in the app now goes through these two functions — one convention, reused,
+not four separate ad hoc fixes.
+
+**Verified before reporting fixed:** ran the exact reported instant
+(`2026-09-28T02:17:13Z`) through `formatMexicoDateTime` under three
+different process timezones (`UTC`, `America/Mexico_City`, `Asia/Tokyo`)
+— all three produced the same correct `27/9/2026, 8:17:13 p.m.`, matching
+what Fatima's own clock showed. Also confirmed a sample departure now
+renders the same hour on both screens (`05:04` on the dashboard's bucket,
+`27/9/2026, 5:04:00 a.m.` in the dossier), closing the exact contradiction
+she found.
+
+**First move for next time:** redeploy, verify per the chat reply, then
+this project has no further planned commits — future work is whatever
+Fatima's own testing surfaces next.
+
+---
+
 ## Session 13 — 2026-09-27 — Isolation test passed; added /demo for grading
 
 **Isolation test (packet's test plan #5), passed at both layers, with an

@@ -14,3 +14,26 @@ export function formatHourLabel(hour: number): string {
   const mm = String(totalMinutes % 60).padStart(2, "0");
   return `${hh}:${mm}`;
 }
+
+/**
+ * Shifts a UTC instant by the fixed Mexico City offset, then formats the
+ * *shifted* instant with `timeZone: "UTC"` so the formatter reads the
+ * shifted wall-clock fields as-is — never the runtime's own system
+ * timezone. Vercel runs in UTC anyway, but this stays correct even
+ * somewhere that isn't (a laptop, a different host), which
+ * `toLocaleString("es-MX")` alone does not: that call only sets locale
+ * (date order, month names), never timezone, so it silently renders in
+ * whatever timezone the process happens to run in.
+ */
+function toMexicoShifted(isoUtc: string): Date {
+  const date = new Date(isoUtc);
+  return new Date(date.getTime() + MEXICO_UTC_OFFSET_HOURS * 60 * 60 * 1000);
+}
+
+export function formatMexicoDateTime(isoUtc: string): string {
+  return toMexicoShifted(isoUtc).toLocaleString("es-MX", { timeZone: "UTC" });
+}
+
+export function formatMexicoDate(isoUtc: string): string {
+  return toMexicoShifted(isoUtc).toLocaleDateString("es-MX", { timeZone: "UTC" });
+}
