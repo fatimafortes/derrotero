@@ -5,6 +5,72 @@ entry per working session, newest on top.
 
 ---
 
+## Session 12 — 2026-09-27 — Commit 6: sharing + dossier + second deploy
+
+**Verified before shipping, not after:** a well-formed-but-nonexistent
+48-hex-char token and a malformed (wrong-length) token both render the
+exact same "no está disponible" page at `200` — checked directly against
+the real Supabase project (`next start` locally, real `.env.local`), not
+just read from the SQL. Combined with `dossier_by_token` already treating
+a revoked grant the same way at the database layer (unchanged, was already
+correct since Commit 1's schema), all three cases — revoked, never
+existed, malformed — are indistinguishable from outside. The page itself
+adds zero branching on *why* the RPC returned null; there is exactly one
+boolean check.
+
+**Decided — only the original granter can revoke, and that's the schema
+as-is, not a workaround.** `share_grants`'s RLS policy's `WITH CHECK`
+requires `granted_by = auth.uid()` on every UPDATE, which — since revoking
+doesn't change `granted_by` — means only the account that created a grant
+can revoke it; a different dirigencia member on the same association gets
+a clear permission error, not a silent no-op. Schema is fixed for this
+slice, so this stands. Flagging it explicitly rather than silently
+building around it: worth knowing if a second dirigencia account is ever
+added to an association mid-flight.
+
+**Decided — the audit log shows "tú" / "otro integrante de la dirigencia",
+not an email.** `granted_by` is a `uuid` referencing `auth.users`, which
+the authenticated/anon roles have no grant to query (only `service_role`
+can, and that key never appears in this codebase per the security floor).
+So the log can't show a real name — it shows whether the viewing dirigencia
+account was the one who granted it, which is enough for "quién concedió
+qué" without needing elevated privileges.
+
+**Decided — PDF via the browser's native print, zero new dependencies.**
+The stack only said "client-side generation," not which library. Given
+this session's repeated preference for the simplest thing that works
+(the MapLibre worker fix, twice), and the working rule to flag a new
+dependency before adding one, I skipped `jspdf` entirely: `PrintButton.tsx`
+just calls `window.print()`, and both the dashboard's own `print:hidden`
+interactive content and a dedicated `hidden print:block` printable dossier
+section (stops table, runs table, DATOS SIMULADOS badge, cut-off date) are
+styled with Tailwind's `print:` variant so only the dossier shows in the
+print/"Save as PDF" dialog. If a true one-click download (vs. the print
+dialog) turns out to matter, that's a small, contained swap later — say so
+and I'll add `jspdf`.
+
+**Built**
+
+- `app/shareActions.ts` — `createShareGrant` (validates recipient length
+  2–120 per Security Floor #4, returns the new token so the UI can show the
+  link immediately) and `revokeShareGrant`, both dirigencia-only.
+- `app/ShareControl.tsx` — replaces the read-only Commit 5 banner. Real
+  ACTIVO/DESACTIVADO state, an inline grant form, and a full log (active +
+  revoked) with each active grant's link shown for re-copying.
+- `app/expediente/[token]/page.tsx` — the public page. No auth; calls
+  `dossier_by_token` via RPC (already granted to `anon` since Commit 1).
+- `app/PrintButton.tsx`, plus `ExpedienteCard` and `PrintableDossier` in
+  `app/page.tsx`.
+
+**First move for next time:** this was the last planned commit. Push (already
+done — Vercel redeploys automatically from `main`), then verify on the live
+site: default state shares nothing, granting produces a working
+`/expediente/<token>` link, revoking kills that same link immediately
+(re-check it after revoking), and "Descargar expediente" opens a clean
+print dialog showing only the dossier.
+
+---
+
 ## Session 11 — 2026-09-27 — Map bug, take two: the first fix was incomplete
 
 **What was actually wrong.** Session 10's fix was half right: pointing

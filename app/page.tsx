@@ -1,3 +1,4 @@
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { signOut } from "@/lib/supabase/actions";
@@ -12,6 +13,8 @@ import {
   type RunMetricRow,
 } from "@/lib/dashboardStats";
 import { DashboardMap, type MapStop } from "@/app/DashboardMap";
+import { ShareControl, type Grant } from "@/app/ShareControl";
+import { PrintButton } from "@/app/PrintButton";
 
 type MembershipRow = {
   role: string;
@@ -65,13 +68,16 @@ export default async function HomePage() {
     ? membership.associations[0]?.name
     : membership.associations?.name;
 
-  const [{ data: activeGrants }, { data: stopsData }, { data: runsData }] =
+  const requestHeaders = await headers();
+  const origin = `https://${requestHeaders.get("host")}`;
+
+  const [{ data: grantsData }, { data: stopsData }, { data: runsData }] =
     await Promise.all([
       supabase
         .from("share_grants")
-        .select("recipient_label")
+        .select("id, recipient_label, granted_at, revoked_at, granted_by, token")
         .eq("association_id", associationId)
-        .is("revoked_at", null),
+        .order("granted_at", { ascending: false }),
       supabase
         .from("inferred_stops")
         .select(
@@ -89,7 +95,7 @@ export default async function HomePage() {
 
   const stops = (stopsData ?? []) as InferredStopRow[];
   const runs = (runsData ?? []) as RunMetricRow[];
-  const isSharing = (activeGrants?.length ?? 0) > 0;
+  const grants = (grantsData ?? []) as Grant[];
 
   const hasData = stops.length > 0 && runs.length > 0;
 
@@ -115,7 +121,8 @@ export default async function HomePage() {
   }));
 
   return (
-    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6">
+    <>
+    <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 print:hidden">
       <header className="mb-6 flex flex-wrap items-baseline justify-between gap-2">
         <div>
           <p className="text-sm font-medium tracking-wide text-accent">
@@ -132,7 +139,7 @@ export default async function HomePage() {
         </form>
       </header>
 
-      <ShadowClauseBanner isSharing={isSharing} recipients={activeGrants ?? []} />
+      <ShareControl grants={grants} currentUserId={user.id} origin={origin} />
 
       {!hasData ? (
         <p className="mt-8 text-sm leading-6 text-foreground/70">
@@ -181,45 +188,23 @@ export default async function HomePage() {
               runCount={runs.length}
               confidence={overallConfidence}
             />
+            <ExpedienteCard
+              runsRecorded={runs.length}
+              stopsInferred={stops.length}
+            />
             <OperadorPreview />
           </div>
         </div>
       )}
     </main>
-  );
-}
-
-function ShadowClauseBanner({
-  isSharing,
-  recipients,
-}: {
-  isSharing: boolean;
-  recipients: { recipient_label: string }[];
-}) {
-  return (
-    <section className="flex flex-wrap items-center justify-between gap-3 border border-accent/40 bg-accent/5 p-4">
-      <div>
-        <p className="text-sm font-semibold text-foreground">
-          Esta medición es de la asociación. Nadie fuera de ella puede verla.
-        </p>
-        <p className="mt-1 text-xs leading-5 text-foreground/70">
-          Compartir con una autoridad es una decisión de la dirigencia,
-          reversible, y queda registrada con fecha y destinatario.
-        </p>
-      </div>
-      <div className="text-right">
-        <p className="text-[11px] font-medium tracking-wide text-foreground/60">
-          COMPARTIR CON TERCEROS
-        </p>
-        <p
-          className={`text-sm font-bold ${isSharing ? "text-data" : "text-accent"}`}
-        >
-          {isSharing
-            ? `ACTIVO — ${recipients.map((r) => r.recipient_label).join(", ")}`
-            : "DESACTIVADO"}
-        </p>
-      </div>
-    </section>
+    {hasData && (
+      <PrintableDossier
+        associationName={associationName}
+        stops={stops}
+        runs={runs}
+      />
+    )}
+    </>
   );
 }
 
@@ -332,6 +317,125 @@ function HallazgoCard({
         Confianza {confidence} · {runCount} corridas · sin verificar en campo
       </p>
     </section>
+  );
+}
+
+function ExpedienteCard({
+  runsRecorded,
+  stopsInferred,
+}: {
+  runsRecorded: number;
+  stopsInferred: number;
+}) {
+  const today = new Date().toLocaleDateString("es-MX");
+  return (
+    <section className="border border-foreground/10 bg-white p-4">
+      <h2 className="text-sm font-semibold text-foreground">
+        Expediente de demanda
+      </h2>
+      <p className="mt-1 text-xs text-foreground/60">
+        Corte al {today} · {runsRecorded} corridas · {stopsInferred} paradas
+      </p>
+      <p className="mt-1 text-xs text-foreground/60">
+        Sin identidad de operador en ningún campo.
+      </p>
+      <div className="mt-3">
+        <PrintButton label="Descargar expediente" />
+      </div>
+    </section>
+  );
+}
+
+function PrintableDossier({
+  associationName,
+  stops,
+  runs,
+}: {
+  associationName?: string;
+  stops: InferredStopRow[];
+  runs: RunMetricRow[];
+}) {
+  const today = new Date().toLocaleDateString("es-MX");
+  return (
+    <main className="hidden px-8 py-8 print:block">
+      <p className="text-sm font-medium tracking-wide text-accent">
+        DERROTERO
+      </p>
+      <h1 className="mt-1 text-lg font-semibold text-foreground">
+        {associationName}
+      </h1>
+      <p className="mt-1 text-sm text-foreground/70">
+        Expediente de demanda · corte al {today} · {runs.length} corridas ·{" "}
+        {stops.length} paradas
+      </p>
+      <p className="mt-1 text-xs font-semibold text-accent">
+        DATOS SIMULADOS — sin identidad de operador en ningún campo
+      </p>
+
+      <section className="mt-6">
+        <h2 className="text-sm font-semibold text-foreground">
+          Paradas inferidas
+        </h2>
+        <table className="mt-2 w-full text-left text-xs">
+          <thead>
+            <tr className="border-b border-foreground/10 text-foreground/60">
+              <th className="py-1 pr-2">Parada</th>
+              <th className="py-1 pr-2">Ascensos est.</th>
+              <th className="py-1 pr-2">Detención media</th>
+              <th className="py-1 pr-2">Corridas</th>
+              <th className="py-1 pr-2">Confianza</th>
+              <th className="py-1 pr-2">Padrón</th>
+            </tr>
+          </thead>
+          <tbody>
+            {stops.map((s, i) => (
+              <tr key={i} className="border-b border-foreground/5">
+                <td className="py-1 pr-2">{s.label ?? "—"}</td>
+                <td className="py-1 pr-2">{s.boardings_est ?? "—"}</td>
+                <td className="py-1 pr-2">{s.dwell_seconds_avg}s</td>
+                <td className="py-1 pr-2">{s.runs_observed}</td>
+                <td className="py-1 pr-2">{s.confidence}</td>
+                <td className="py-1 pr-2">
+                  {s.in_official_padron ? "sí" : "no registrada"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="mt-6">
+        <h2 className="text-sm font-semibold text-foreground">Corridas</h2>
+        <table className="mt-2 w-full text-left text-xs">
+          <thead>
+            <tr className="border-b border-foreground/10 text-foreground/60">
+              <th className="py-1 pr-2">Salida</th>
+              <th className="py-1 pr-2">Intervalo</th>
+              <th className="py-1 pr-2">Ocupación al salir</th>
+              <th className="py-1 pr-2">Confianza</th>
+            </tr>
+          </thead>
+          <tbody>
+            {runs.map((r, i) => (
+              <tr key={i} className="border-b border-foreground/5">
+                <td className="py-1 pr-2">
+                  {new Date(r.departed_at).toLocaleString("es-MX")}
+                </td>
+                <td className="py-1 pr-2">
+                  {r.headway_minutes !== null
+                    ? `${Math.round(r.headway_minutes)} min`
+                    : "—"}
+                </td>
+                <td className="py-1 pr-2">
+                  {Math.round(r.occupancy_at_departure * 100)}%
+                </td>
+                <td className="py-1 pr-2">{r.confidence}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
+    </main>
   );
 }
 
