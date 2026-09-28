@@ -5,6 +5,52 @@ entry per working session, newest on top.
 
 ---
 
+## Session 7 — 2026-09-27 — iOS 0-pings bug: resolved (device, not code)
+
+**Resolution:** the on-screen diagnostic panel added in Session 6 answered
+the question directly — it was none of the four original suspects.
+
+```
+Permiso de ubicación: desconocido
+Errores: 1 (code=1 User denied Geolocation)
+Recargas silenciosas: 0
+Pestaña oculta: 0
+```
+
+Location permission was never actually granted on that iPhone. Confirmed
+across Safari and Chrome, after checking Settings and clearing site data —
+five real shifts, all 0 pings. The same phone-adjacent laptop session in
+production, same deploy, wrote pings normally (2 in 58s). **This is device
+configuration, not an app bug** — the app already handles a denied
+permission correctly (readable Spanish message, shift still opens and
+closes normally, per the Commit 2 requirement). Not pursuing further.
+
+This is the second bug this project found by making the real state visible
+instead of guessing (see Session 2's 42501 permission error). Both times
+the fix followed directly from what got surfaced; neither would have been
+found by reasoning about the code alone. Worth keeping as a working
+pattern, not just a one-off.
+
+**Fixed for real: `flushBuffer` used to lose pings on a failed send.** It
+cleared the in-memory buffer *before* attempting the insert, so any network
+failure — unrelated to the iOS permission issue, but genuinely present in
+the code the whole time — silently dropped those specific rows with no
+retry. Now: the buffer is only trimmed by however many rows were *confirmed*
+written; a failed insert leaves everything in place for the next flush
+(periodic, or the final one on shift end) to retry. Flush calls are
+serialized through a promise chain so an overlapping periodic tick and the
+end-of-shift flush can't race on the same buffer contents.
+
+**Removed:** the diagnostic panel and all its plumbing (`localStorage`-
+persisted per-shift counters, permission/visibility/bfcache listeners) —
+a driver's screen shows one button, not debug counters, once its job is
+done. `app/operador/OperadorClient.tsx` is back to the Commit 2 shape plus
+the `flushBuffer` fix above.
+
+**First move for next time:** start Commit 5 (dirigente dashboard).
+
+---
+
 ## Session 6 — 2026-09-27 — Bug: 0 pings written on iOS, diagnosis in progress
 
 **What broke:** on the deployed HTTPS site, a real shift on an iPhone
