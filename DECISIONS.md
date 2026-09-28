@@ -5,6 +5,66 @@ entry per working session, newest on top.
 
 ---
 
+## Session 13 — 2026-09-27 — Isolation test passed; added /demo for grading
+
+**Isolation test (packet's test plan #5), passed at both layers, with an
+account created for exactly this purpose:**
+- Browser layer: the second Google account, made a member of the
+  isolation-test association, sees that association's name and an empty
+  dashboard — no San Bartolo map, stops, hallazgo, or log.
+- Database layer, more rigorous: impersonated that account's session
+  directly in SQL (`set local role authenticated; set local
+  request.jwt.claims = '{"sub": "..."}'`) and queried San Bartolo's tables
+  directly. All zero — not a permission error, just no rows, meaning
+  `is_member()` correctly evaluates false for this account on every table.
+  The positive control (that account's own unit count = 1) confirms RLS is
+  scoping, not blanket-denying.
+
+**Decided — `/demo` is a real grant, not a bypass, and that's the whole
+design.** Fatima needs her grader to see the full dashboard without a
+membership, without weakening the shadow clause for anyone else. Rejected
+any approach that would add a code-level exception (e.g. "if this is the
+demo association, skip the membership check") — that really would be a
+crack in Condition 2. Instead: `/demo` calls the exact same
+`dossier_by_token` security-definer function that `/expediente/[token]`
+already uses, reading a **real, permanent `share_grants` row** Fatima
+creates by hand (recipient label: "Vista de demostración académica"),
+whose token lives only in a server-side env var
+(`DEMO_DOSSIER_TOKEN`), never in the repo. Consequences of that choice,
+which is the actual defense:
+- It shows up in Fatima's own bitácora like any other grant — dated,
+  logged, attributable.
+- It is exactly as revocable as any other grant: hit "Revocar" on it from
+  the dashboard and `/demo` shows the same "no disponible" state as an
+  expired share link, with zero code change.
+- No new privileged code path was written. `/demo` re-maps the same JSON
+  `dossier_by_token` already returns (Spanish field names) into the same
+  `InferredStopRow`/`RunMetricRow` shapes `lib/dashboardStats.ts` and
+  `DashboardMap` already consume — reusing, not duplicating, everything
+  already verified. The route line is `lib/corridor.ts`'s static
+  coordinates, which was never a database read to begin with.
+- Extracted `StatRow`/`HeadwayChart`/`HallazgoCard`/`OperadorPreview` out
+  of `app/page.tsx` into `app/dashboardComponents.tsx` so `/` and `/demo`
+  render from the identical components, not a copy that can drift.
+- Verified locally (no token configured yet) that the route degrades to a
+  calm "vista de demostración no disponible" — never a crash, never a
+  hint about what a real token would look like.
+
+**How to defend this technically, if asked:** the shadow clause's actual
+claim is "no reader outside the association sees anything except through
+a dated, logged, revocable grant." `/demo` doesn't violate that — it *is*
+one. The thing it deliberately does not do is grant a *membership*
+(RLS-level, indefinite, full read access including future data) to an
+anonymous visitor; it grants exactly what any external authority gets
+through the product's own sharing feature, scoped to one already-simulated
+association's data, revocable the same way.
+
+**What Fatima still needs to do:** run the `share_grants` insert SQL
+(returns the token), set `DEMO_DOSSIER_TOKEN` in Vercel (Production +
+Preview), redeploy.
+
+---
+
 ## Session 12 — 2026-09-27 — Commit 6: sharing + dossier + second deploy
 
 **Verified before shipping, not after:** a well-formed-but-nonexistent
