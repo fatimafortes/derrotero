@@ -5,6 +5,50 @@ entry per working session, newest on top.
 
 ---
 
+## Session 11 — 2026-09-27 — Map bug, take two: the first fix was incomplete
+
+**What was actually wrong.** Session 10's fix was half right: pointing
+`setWorkerUrl()` at a static file did solve the MIME-type/404 problem. But
+`maplibre-gl-worker.mjs` isn't self-contained — it has its own relative
+import, `import {...} from "./maplibre-gl-shared.mjs"`. I'd only copied the
+worker file into `public/`, not that dependency, so the worker's own module
+graph 404'd one level deeper: same failure mode (worker never starts,
+canvas stays blank, attribution still shows), different missing file. Not
+an ESM/UMD mismatch as suspected — just an incomplete copy.
+
+**Verified before reporting this fixed, not after:** copied
+`maplibre-gl-shared.mjs` alongside the worker file, then actually
+reproduced the bug and the fix locally — built a throwaway `/maptest` route
+rendering `DashboardMap` directly, ran it under `next start` (production
+mode, matching what Vercel runs), and opened it in a real browser via
+Claude in Chrome. First screenshot reproduced Fatima's exact symptom (blank
+gray panel, only CARTO attribution). After confirming both files serve
+`200` with the right content type (checked with `fetch()` from the page
+itself, not just curl), a later screenshot showed the actual basemap, the
+route line, all 9 stop circles correctly colored, and the informal stop's
+callout — console clean, no errors. Removed the test route before
+committing; it was never meant to ship.
+
+**Answering the direct questions:**
+- Yes, `https://derrotero-sigma.vercel.app/maplibre-gl-worker.mjs` can be
+  opened directly in a browser to check it deployed — it should show
+  minified JS starting with a MapLibre license comment, not a 404 page.
+- It wasn't a wrong bundle format (ESM vs UMD) — both worker and main
+  library are ESM and that pairing is correct; the worker file was just
+  missing its own dependency in the deploy.
+- Considered raster tiles as a simpler fallback, per the question asked,
+  but didn't take that path: our own overlay layers (the route line, the
+  stop circles) are GeoJSON sources, which MapLibre also processes through
+  its worker regardless of whether the *base* style is vector or raster —
+  switching the base style away from vector tiles would not have removed
+  the dependency on a working worker. Fixing the worker was the real fix
+  available, not a workaround.
+
+**First move for next time:** redeploy, verify (see chat reply), then
+Commit 6.
+
+---
+
 ## Session 10 — 2026-09-27 — Map bug resolved: MapLibre's worker, not CSS
 
 **Root cause, one line:** Turbopack resolves MapLibre's internal web worker
