@@ -177,6 +177,16 @@ create table if not exists public.share_grants (
 create index if not exists share_grants_assoc_idx
   on public.share_grants (association_id, granted_at desc);
 
+-- is_demo: marca la ÚNICA concesión que sirve /demo (ver demo_dossier, §9).
+-- Va en alter, no en el create, para que re-correr este archivo sobre una
+-- base existente también la agregue. Se marca a mano en el SQL Editor; la
+-- dirigencia no puede escribir esta columna (ver §13).
+alter table public.share_grants
+  add column if not exists is_demo boolean not null default false;
+create unique index if not exists share_grants_one_demo_idx
+  on public.share_grants ((true))
+  where is_demo;
+
 
 -- ============================================================================
 -- 9. LECTURA EXTERNA POR TOKEN
@@ -239,6 +249,41 @@ end;
 $$;
 
 grant execute on function public.dossier_by_token(text) to anon, authenticated;
+
+-- Lectura de /demo, sin token: el estado de la única concesión con is_demo.
+-- Distinguir sin_configurar / revocada / ok aquí no abre ningún sondeo
+-- (no recibe token). dossier_by_token sigue sin distinguir revocada de
+-- inexistente, y para el caso vigente esta función delega en él.
+create or replace function public.demo_dossier()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  g public.share_grants;
+begin
+  select * into g
+    from public.share_grants
+   where is_demo;
+
+  if not found then
+    return jsonb_build_object('estado', 'sin_configurar');
+  end if;
+
+  if g.revoked_at is not null then
+    return jsonb_build_object('estado', 'revocada', 'revocada_el', g.revoked_at);
+  end if;
+
+  return jsonb_build_object(
+    'estado', 'ok',
+    'expediente', public.dossier_by_token(g.token)
+  );
+end;
+$$;
+
+grant execute on function public.demo_dossier() to anon, authenticated;
 
 
 -- ============================================================================
@@ -387,16 +432,25 @@ on conflict do nothing;
 -- alta ni cambiar de asociación por su cuenta; eso lo hace quien administra.
 grant select on public.associations, public.memberships to authenticated;
 
--- las seis tablas operativas: lectura y escritura, siempre acotada después
--- por RLS a la fila donde is_member(association_id) es verdadero.
+-- cinco de las seis tablas operativas: lectura y escritura, siempre acotada
+-- después por RLS a la fila donde is_member(association_id) es verdadero.
+-- share_grants, la sexta, va aparte justo abajo.
 grant select, insert, update, delete on
   public.units,
   public.shifts,
   public.pings,
   public.inferred_stops,
-  public.run_metrics,
-  public.share_grants
+  public.run_metrics
 to authenticated;
+
+-- share_grants: por columna, para que la dirigencia no pueda escribir
+-- is_demo. Solo lo que usa app/shareActions.ts: conceder (insert de estas
+-- tres columnas) y revocar (update de revoked_at).
+grant select, delete on public.share_grants to authenticated;
+grant insert (association_id, recipient_label, granted_by)
+  on public.share_grants to authenticated;
+grant update (revoked_at)
+  on public.share_grants to authenticated;
 
 -- pings usa bigserial (id): nextval() necesita usage sobre su secuencia.
 grant usage on all sequences in schema public to authenticated;

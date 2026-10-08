@@ -17,6 +17,7 @@ import {
   OperadorPreview,
   StatRow,
 } from "@/app/dashboardComponents";
+import { formatMexicoDateTime } from "@/lib/mexicoTime";
 
 type DossierStop = {
   lat: number;
@@ -42,45 +43,69 @@ type Dossier = {
   corridas: DossierRun[];
 };
 
+type DemoResult =
+  | { estado: "sin_configurar" }
+  | { estado: "revocada"; revocada_el: string }
+  | { estado: "ok"; expediente: Dossier | null };
+
 /**
  * Público, sin sesión, de solo lectura — a propósito.
  *
- * No es una puerta especial alrededor de la cláusula sombra: consume la
- * MISMA función `dossier_by_token` (security definer) que usa cualquier
- * enlace de /expediente/[token]. El token que lee viene de una fila real
- * y permanente en share_grants (destinatario: "Vista de demostración
- * académica"), creada a mano para esta evaluación — visible en la propia
+ * No es una puerta especial alrededor de la cláusula sombra: lee la única
+ * fila de share_grants marcada con is_demo (destinatario: "Vista de
+ * demostración académica"), una concesión real — visible en la propia
  * bitácora de la asociación, fechada, y revocable exactamente igual que
- * cualquier otra concesión. Si algún día se revoca, esta página muestra
- * el mismo "no disponible" que cualquier enlace expirado, sin código
- * especial que lo prevenga. La demo no rodea el modelo de acceso: lo
- * ejercita.
+ * cualquier otra. `demo_dossier()` delega en la MISMA `dossier_by_token`
+ * que usa /expediente/[token] para armar el expediente. La demo no rodea
+ * el modelo de acceso: lo ejercita.
+ *
+ * A diferencia de /expediente/[token], aquí SÍ se distingue por qué no hay
+ * expediente: no hay token que sondear, solo el estado de una concesión
+ * fija. Un mensaje único para los tres casos ya produjo un diagnóstico
+ * equivocado (ver DECISIONS.md, Session 15).
  */
 export default async function DemoPage() {
-  const token = process.env.DEMO_DOSSIER_TOKEN;
-
   const supabase = await createClient();
-  const { data } = token
-    ? await supabase.rpc("dossier_by_token", { p_token: token })
-    : { data: null };
-  const dossier = (data ?? null) as Dossier | null;
+  const { data, error } = await supabase.rpc("demo_dossier");
 
-  if (!dossier) {
+  if (error) {
     return (
-      <main className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-        <div className="max-w-md">
-          <p className="text-sm font-medium tracking-wide text-accent">
-            DERROTERO
-          </p>
-          <h1 className="mt-2 text-xl font-semibold text-foreground">
-            Vista de demostración no disponible
-          </h1>
-          <p className="mt-3 text-sm leading-6 text-foreground/70">
-            El enlace de demostración académica no está configurado o fue
-            revocado.
-          </p>
-        </div>
-      </main>
+      <Unavailable
+        title="No se pudo consultar la base de datos"
+        detail={`La consulta a Supabase falló: ${error.message}`}
+      />
+    );
+  }
+
+  const result = data as DemoResult | null;
+
+  if (!result || result.estado === "sin_configurar") {
+    return (
+      <Unavailable
+        title="Vista de demostración sin configurar"
+        detail="Ninguna concesión está marcada como demostración (share_grants.is_demo)."
+      />
+    );
+  }
+
+  if (result.estado === "revocada") {
+    return (
+      <Unavailable
+        title="Vista de demostración revocada"
+        detail={`La concesión de demostración fue revocada el ${formatMexicoDateTime(result.revocada_el)}.`}
+      />
+    );
+  }
+
+  const dossier = result.expediente;
+  if (!dossier) {
+    // demo_dossier solo responde "ok" para una concesión vigente, así que
+    // dossier_by_token no debería devolver null aquí.
+    return (
+      <Unavailable
+        title="Vista de demostración no disponible"
+        detail="La concesión de demostración está vigente, pero no devolvió expediente."
+      />
     );
   }
 
@@ -201,6 +226,20 @@ export default async function DemoPage() {
           </div>
         </div>
       )}
+    </main>
+  );
+}
+
+function Unavailable({ title, detail }: { title: string; detail: string }) {
+  return (
+    <main className="flex flex-1 flex-col items-center justify-center px-6 text-center">
+      <div className="max-w-md">
+        <p className="text-sm font-medium tracking-wide text-accent">
+          DERROTERO
+        </p>
+        <h1 className="mt-2 text-xl font-semibold text-foreground">{title}</h1>
+        <p className="mt-3 text-sm leading-6 text-foreground/70">{detail}</p>
+      </div>
     </main>
   );
 }

@@ -5,6 +5,95 @@ entry per working session, newest on top.
 
 ---
 
+## Session 15 — 2026-10-07 — /demo down in production: the error message lied
+
+**Symptom.** For days `/demo` showed "Vista de demostración no disponible —
+no está configurado o fue revocado" while the demo grant was live
+(`revoked_at` null) and the exact same token rendered the full dossier at
+`/expediente/[token]`. Fatima had ruled out everything external (Supabase
+up, grant live, token works, `DEMO_DOSSIER_TOKEN` set in Vercel, two
+redeploys without build cache).
+
+**Ruled out with evidence, not reasoning:**
+- Static generation (her first hypothesis): `next build` lists `ƒ /demo`
+  (dynamic). `createClient()` calls `cookies()`, which forces dynamic
+  rendering, and the env var has no `NEXT_PUBLIC_` prefix, so it is never
+  inlined at build time. It was always read at request time.
+- Commit 449ff79 (timezone fix) did not touch `app/demo/`.
+- The page code itself: the production build, run locally against the
+  same Supabase project with the exact 48-char token, rendered the demo.
+
+**Cause: an env value that wasn't exactly the token, producing the same
+message as a revocation.** Same build, same database, varying only the
+env value: the exact token renders; token + trailing newline, a leading
+space, or surrounding quotes all show "no disponible". The reason is
+`dossier_by_token`'s first guard, `char_length(p_token) <> 48 → null`.
+One invisible extra character turns into a null, and that null is
+indistinguishable from a revoked grant, by design. So the message stated
+a cause ("no está configurado o fue revocado") that was false, and the
+diagnosis followed the message. That cost Fatima points. The real defect
+wasn't the whitespace; it was a page that collapsed "no token", "database
+didn't answer" and "grant revoked" into one sentence, and also threw away
+the RPC's `error`.
+- Not confirmed directly against the value Vercel stores (repo isn't
+  linked to the Vercel project here). The mechanism is reproduced exactly.
+  Moot once the variable is deleted.
+
+**Decided — `/demo` resolves its grant from the database, not from an env
+var.**
+- `share_grants.is_demo` + unique partial index (`where is_demo`): at most
+  one demo grant, live or revoked, so there is never a choice to make.
+  Marked by hand in the SQL Editor.
+- Not by `recipient_label`: it's free text, not unique, and any
+  association's dirigencia can write any label, so another association
+  could have hijacked `/demo`. For the same reason `authenticated` lost
+  table-level `insert`/`update` on `share_grants` and got column-level
+  grants for exactly what `app/shareActions.ts` writes (insert
+  `association_id, recipient_label, granted_by`; update `revoked_at`).
+  No dirigencia can set or clear `is_demo`.
+- `demo_dossier()` (security definer, no arguments) returns `sin_configurar`
+  / `revocada` (+ date) / `ok` (+ dossier). For `ok` it delegates to the
+  unchanged `dossier_by_token`, so `/demo` still exercises the real access
+  path instead of going around it.
+- `/demo` now shows four distinct screens: database error (with Supabase's
+  message), no demo grant marked, demo grant revoked (with date), and the
+  dossier.
+- **`/expediente/[token]` and `dossier_by_token` are untouched.** A revoked
+  token and an unknown one still render the identical screen. That
+  indistinguishability is the shadow clause, demonstrated. Distinguishing
+  states in `/demo` doesn't weaken it: `demo_dossier()` takes no token, so
+  there is nothing to probe. It only reports on one fixed grant.
+
+**Migration:** `supabase/migrations/20261007_demo_dossier.sql`, run once in
+the SQL Editor. `schema.sql` mirrors it for fresh databases, but editing
+it applies nothing to the existing one.
+
+**Applying it: the Supabase SQL Editor choked on the single block.**
+As delivered, the migration wrapped everything in `begin; … commit;`
+around a `create function … as $$ … begin … end; $$`. The editor didn't
+run it as one block. Fatima's read is that it confuses the transaction
+`begin` with the plpgsql `begin`. She applied it in three batches
+instead (schema + grants / function / `update`), with no transaction and
+a named dollar tag (`$demo_fn$`). The migration file now records exactly
+what was run. `select public.demo_dossier() ->> 'estado'` → `ok` in
+production.
+- **Rule for every future migration:** deliver it as separate batches,
+  one per paste, no `begin`/`commit` wrapper, and each function body under
+  its own named dollar tag (`$name_fn$`), never bare `$$`.
+
+**Verified:** `next build` + lint clean; before the migration, `/demo`
+correctly shows "No se pudo consultar la base de datos — Could not find
+the function public.demo_dossier…" instead of the old catch-all.
+`/expediente/[token]` unchanged: a valid token renders, an unknown one
+shows "Este expediente no está disponible".
+
+**First move for next time:** once this deploys, load `/demo` in
+production, then delete `DEMO_DOSSIER_TOKEN` from Vercel. Grant + revoke
+one throwaway share from the dashboard to confirm the column-level grants
+didn't break sharing (not yet exercised against the live database).
+
+---
+
 ## Session 14 — 2026-09-27 — Bug #3 found by observation: /expediente dates in UTC
 
 **Found by the persona test, not by guessing — the third time this project's
